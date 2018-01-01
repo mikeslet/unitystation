@@ -57,6 +57,9 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 	public bool isPushing;
 	public bool predictivePushing = false;
 
+	public bool isPulling;
+	float journeyLength = 1f;
+
 	private void Start()
 	{
 		registerTile = GetComponent<RegisterTile>();
@@ -120,6 +123,7 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 	private void UpdateServerTransformState(Vector3 pos, bool notify = true, float speed = 4f){
 		serverTransformState.Speed = speed;
 		serverTransformState.localPos = pos;
+		SpeedMultiplier = speed;
 		if (notify) {
 			NotifyPlayers();
 		}
@@ -227,8 +231,21 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 		newState.Speed = speed;
 		newState.localPos = pos;
 		UpdateClientState(newState);
+		SpeedMultiplier = speed;
 		predictivePushing = true;
 		pushComponent.pushing = true;
+		Lerp();
+	}
+
+	public void PullToPosition(Vector3 pos, float speed){
+		isPulling = true;
+		TransformState newState = new TransformState();
+		newState.Active = true;
+		newState.Speed = speed;
+		newState.localPos = pos;
+		UpdateClientState(newState);
+		SpeedMultiplier = speed;
+		Lerp();
 	}
 
 	public void UpdateClientState(TransformState newState)
@@ -303,10 +320,11 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 		{
 			return;
 		}
-
+		if(isPulling && transformState.localPos == transform.localPosition){
+			isPulling = false;
+		}
 		if (isServer)
 		{
-			CheckSpaceDrift();
 			//Sync the pushing state to all players
 			//this makes sure that players with high pings cannot get too
 			//far with prediction
@@ -315,10 +333,12 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 					isPushing = false;
 					predictivePushing = false;
 				}
+			} else {
+				CheckSpaceDrift();
 			}
 		} 
 
-		if (IsFloating())
+		if (IsFloating() && !isPushing)
 		{
 			SimulateFloating();
 		}
@@ -351,8 +371,13 @@ public class CustomNetTransform : ManagedNetworkBehaviour //see UpdateManager
 
 	private void Lerp()
 	{
+		if(isPulling){
+			journeyLength = Vector3.Distance(transform.localPosition, transformState.localPos);
+		} else {
+			journeyLength = 1f;
+		}
 		transform.localPosition =
-			Vector3.MoveTowards(transform.localPosition, transformState.localPos, transformState.Speed * SpeedMultiplier * Time.deltaTime);
+			         Vector3.MoveTowards(transform.localPosition, transformState.localPos, (transformState.Speed * SpeedMultiplier) * journeyLength * Time.deltaTime);
 	}
 
 	/// <summary>

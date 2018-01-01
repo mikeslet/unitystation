@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Tilemaps;
 using Tilemaps.Behaviours.Objects;
 using Tilemaps.Scripts;
@@ -20,10 +21,11 @@ namespace PlayGroup
 		public int[] keyCodes;
 	}
 
-	public class PlayerSync : NetworkBehaviour
+	public class PlayerSync : ManagedNetworkBehaviour
 	{
 		private bool canRegister = false;
 		private HealthBehaviour healthBehaviorScript;
+		private CustomNetTransform pullObjectCNT;
 
 		//TODO: Remove the space damage coroutine when atmos is implemented
 		private bool isApplyingSpaceDmg;
@@ -40,7 +42,7 @@ namespace PlayGroup
 		public GameObject pullingObject;
 
 		//pull objects
-		[SyncVar(hook = nameof(PullReset))] public NetworkInstanceId pullObjectID;
+		[SyncVar(hook="PullReset")] public NetworkInstanceId pullObjectID;
 
 		private Vector3 pullPos;
 		private RegisterTile pullRegister;
@@ -143,7 +145,7 @@ namespace PlayGroup
 		}
 
 
-		private void Update()
+		public override void UpdateMe()
 		{
 			if (isLocalPlayer && playerMove != null)
 			{
@@ -172,6 +174,7 @@ namespace PlayGroup
 			}
 
 			Synchronize();
+			base.UpdateMe();
 		}
 
 		private void RegisterObjects()
@@ -179,10 +182,10 @@ namespace PlayGroup
 			//Register playerpos in matrix
 			registerTile.UpdatePosition();
 			//Registering objects being pulled in matrix
-			if (pullRegister != null)
-			{
-				pullRegister.UpdatePosition();
-			}
+			//if (pullRegister != null)
+			//{
+			//	pullRegister.UpdatePosition();
+			//}
 		}
 
 		private void DoAction()
@@ -230,10 +233,10 @@ namespace PlayGroup
 						transform.hasChanged = false;
 						PullObject();
 					}
-					else if (pullingObject.transform.localPosition != pullPos)
-					{
-						pullingObject.transform.localPosition = pullPos;
-					}
+					//else if (pullingObject.transform.localPosition != pullPos)
+					//{
+					//	pullingObject.transform.localPosition = pullPos;
+					//}
 				}
 
 				//Registering
@@ -259,18 +262,21 @@ namespace PlayGroup
 			Vector3Int pos = Vector3Int.RoundToInt(pullPos);
 			if (matrix.IsPassableAt(pos) || matrix.ContainsAt(pos, gameObject) || matrix.ContainsAt(pos, pullingObject))
 			{
+
 				float journeyLength = Vector3.Distance(pullingObject.transform.localPosition, pullPos);
-				if (journeyLength <= 2f)
-				{
-					pullingObject.transform.localPosition =
-						Vector3.MoveTowards(pullingObject.transform.localPosition, pullPos, playerMove.speed * Time.deltaTime / journeyLength);
-				}
-				else
-				{
-					//If object gets too far away activate warp speed
-					pullingObject.transform.localPosition =
-						Vector3.MoveTowards(pullingObject.transform.localPosition, pullPos, playerMove.speed * Time.deltaTime * 30f);
-				}
+				pullObjectCNT.PullToPosition(pos, playerMove.speed * journeyLength);
+
+				//if (journeyLength <= 2f)
+				//{
+				//	pullingObject.transform.localPosition =
+				//		Vector3.MoveTowards(pullingObject.transform.localPosition, pullPos, playerMove.speed * Time.deltaTime / journeyLength);
+				//}
+				//else
+				//{
+				//	//If object gets too far away activate warp speed
+				//	pullingObject.transform.localPosition =
+				//		Vector3.MoveTowards(pullingObject.transform.localPosition, pullPos, playerMove.speed * Time.deltaTime * 30f);
+				//}
 				pullingObject.BroadcastMessage("FaceDirection", playerSprites.currentDirection, SendMessageOptions.DontRequireReceiver);
 			}
 		}
@@ -325,12 +331,14 @@ namespace PlayGroup
 				}
 				pullRegister = null;
 				pullingObject = null;
+				pullObjectCNT = null;
 			}
 			else
 			{
 				pullingObject = ClientScene.FindLocalObject(netID);
 				PushPull oA = pullingObject.GetComponent<PushPull>();
 				pullPos = pullingObject.transform.localPosition;
+				pullObjectCNT = pullingObject.GetComponent<CustomNetTransform>();
 				if (oA != null)
 				{
 					oA.pulledBy = gameObject;
@@ -368,8 +376,12 @@ namespace PlayGroup
 			if (matrix.IsFloatingAt(pos))
 			{
 				Vector3Int newGoal = Vector3Int.RoundToInt(transform.localPosition + (Vector3) lastDirection);
-				serverState.Position = newGoal;
-				predictedState.Position = newGoal;
+				if (matrix.IsPassableAt(newGoal) || matrix.ContainsAt(newGoal, gameObject)) {
+					serverState.Position = newGoal;
+					predictedState.Position = newGoal;
+				} else {
+					Interact(newGoal);
+				}
 			}
 			if (matrix.IsEmptyAt(pos) && !healthBehaviorScript.IsDead && CustomNetworkManager.Instance._isServer
 			    && !isApplyingSpaceDmg)
@@ -378,6 +390,17 @@ namespace PlayGroup
 				StartCoroutine(ApplyTempSpaceDamage());
 				isApplyingSpaceDmg = true;
 			}
+		}
+
+		//Private member similiar to playerMoves interact but hidden for security
+		private void Interact(Vector3Int interactPos){
+			//Is the object pushable (iterate through all of the objects at the position):
+			PushPull[] pushPulls = matrix.Get<PushPull>(interactPos).ToArray();
+			for (int i = 0; i < pushPulls.Length; i++) {
+				if (pushPulls[i] && pushPulls[i].gameObject != gameObject) {
+					pushPulls[i].TryPush(gameObject, -(Vector3)lastDirection);
+				}
+			}	
 		}
 
 		//TODO: Remove this when atmos is implemented 
